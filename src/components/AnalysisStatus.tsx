@@ -107,12 +107,27 @@ export const AnalysisStatus: React.FC<AnalysisStatusProps> = ({
           )}
         </div>
 
-        <div className="bg-amber-50 rounded-lg p-4 text-left border border-amber-200 text-xs text-amber-800 space-y-1">
-          <p className="font-semibold">Important:</p>
-          <p>
-            No fake or sample RFQ data is generated when analysis encounters an issue. Ensure your PDF has readable text (not a low-resolution photograph) and is not password protected.
-          </p>
-        </div>
+        {errorCode === 'KEY_NOT_CONFIGURED' ? (
+          <div className="bg-blue-50 rounded-lg p-4 text-left border border-blue-200 text-xs text-blue-900 space-y-2">
+            <p className="font-bold text-blue-950 flex items-center space-x-1.5">
+              <span>How to configure MISTRAL_API_KEY in Vercel:</span>
+            </p>
+            <ol className="list-decimal list-inside space-y-1 text-[11px] text-blue-900 pl-1">
+              <li>Open your project in the <a href="https://vercel.com/dashboard" target="_blank" rel="noreferrer" className="underline font-semibold">Vercel Dashboard</a>.</li>
+              <li>Go to <strong>Settings</strong> &gt; <strong>Environment Variables</strong>.</li>
+              <li>Add a new variable with Key: <code className="bg-blue-100 text-blue-800 px-1 py-0.5 rounded font-mono font-bold">MISTRAL_API_KEY</code> and your Mistral API key as Value.</li>
+              <li>Select <strong>Production</strong>, <strong>Preview</strong>, and <strong>Development</strong>.</li>
+              <li>Go to <strong>Deployments</strong> &gt; Click the <strong>...</strong> menu on your latest deployment &gt; select <strong>Redeploy</strong>.</li>
+            </ol>
+          </div>
+        ) : (
+          <div className="bg-amber-50 rounded-lg p-4 text-left border border-amber-200 text-xs text-amber-800 space-y-1">
+            <p className="font-semibold">Important:</p>
+            <p>
+              No fake or sample RFQ data is generated when analysis encounters an issue. Ensure your PDF has readable text (not a low-resolution photograph) and is not password protected.
+            </p>
+          </div>
+        )}
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-3 pt-2">
           <button
