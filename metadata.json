@@ -1,6 +1,6 @@
 {
   "name": "RFQ Extractor - Industrial Parts & Equipment Quotation",
-  "description": "Extract, verify, and export customer RFQs for industrial equipment and aftermarket parts using Mistral AI API.",
+  "description": "Extract, verify, and export customer RFQs for industrial equipment and aftermarket parts using Google Gemini API.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

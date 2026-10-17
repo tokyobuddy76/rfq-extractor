@@ -1,25 +1,13 @@
 import type { Request, Response } from 'express';
-import { Mistral } from '@mistralai/mistralai';
-import zlib from 'node:zlib';
+import { GoogleGenAI, Type } from '@google/genai';
 
-// Vercel Serverless Function Configuration
-export const config = {
-  api: {
-    bodyParser: {
-      sizeLimit: '25mb',
-    },
-  },
-};
+const RFQ_SYSTEM_INSTRUCTION = `You are an industrial RFQ document extraction system.
 
-export const maxDuration = 60; // 60s timeout for multi-page extraction
-
-const RFQ_SYSTEM_INSTRUCTION = `You are an industrial RFQ document extraction system powered by Mistral AI.
-
-Analyze the entire supplied document text, tables, and equipment schedules.
+Analyze the entire supplied PDF.
 
 Extract information exactly as written in the document.
 
-Pay particular attention to tables, line items, part numbers, drawing numbers, equipment serial numbers, and quantities.
+Pay particular attention to tables, line items, part numbers, drawing numbers, equipment serial numbers and quantities.
 
 A document may contain multiple equipment serial numbers and multiple requested parts. Preserve the relationship between equipment and parts whenever the document makes that relationship clear.
 
@@ -29,7 +17,7 @@ Never invent missing values.
 
 If a field is absent, return null or empty string.
 
-Do not change punctuation, leading zeros, hyphens, or capitalization in part numbers, drawing numbers, or serial numbers.
+Do not change punctuation, leading zeros, hyphens or capitalization in part numbers, drawing numbers or serial numbers.
 
 Distinguish part numbers from drawing numbers whenever the document identifies them separately.
 
@@ -37,212 +25,113 @@ Return every requested line item, not merely the first one.
 
 Capture important technical or commercial information that does not fit the predefined schema under additionalInformation.
 
-Return ONLY a valid JSON object conforming to the required schema without markdown code fences or conversational text.`;
+Return only data conforming to the required structured-output schema.`;
 
-const JSON_SCHEMA_TEMPLATE = `{
-  "customer": {
-    "companyName": null,
-    "address": null,
-    "contactName": null,
-    "email": null,
-    "phone": null,
-    "country": null,
-    "customerReference": null
-  },
-  "rfq": {
-    "rfqNumber": null,
-    "rfqDate": null,
-    "dueDate": null,
-    "currency": null,
-    "requestedDeliveryDate": null,
-    "deliveryLocation": null,
-    "incoterms": null
-  },
-  "equipment": [
-    {
-      "type": null,
-      "model": null,
-      "manufacturer": null,
-      "serialNumber": null,
-      "tagNumber": null,
-      "description": null,
-      "otherIdentification": null
-    }
-  ],
-  "lineItems": [
-    {
-      "lineNumber": "1",
-      "partNumber": null,
-      "customerPartNumber": null,
-      "drawingNumber": null,
-      "description": null,
-      "quantity": null,
-      "unit": null,
-      "equipmentSerialNumber": null,
-      "revision": null,
-      "material": null,
-      "requestedDeliveryDate": null,
-      "notes": null
-    }
-  ],
-  "requirements": {
-    "technical": [],
-    "commercial": [],
-    "certifications": [],
-    "inspection": [],
-    "packaging": [],
-    "shipping": [],
-    "specialInstructions": []
-  },
-  "additionalInformation": [],
-  "reviewFlags": []
-}`;
-
-function cleanAndParseJson(text: string): any {
-  let cleaned = text.trim();
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  }
-  const firstBrace = cleaned.indexOf('{');
-  const lastBrace = cleaned.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    cleaned = cleaned.substring(firstBrace, lastBrace + 1);
-  }
-  return JSON.parse(cleaned);
-}
-
-/**
- * Pure Node.js zero-dependency PDF text extractor.
- * Handles both uncompressed text and FlateDecode streams using built-in zlib.
- * Never fails due to missing canvas, workers, or font assets.
- */
-function extractPureTextFromPdf(buffer: Buffer): string {
-  const textChunks: string[] = [];
-  const raw = buffer.toString('latin1');
-
-  // Match all PDF streams
-  const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
-  let match: RegExpExecArray | null;
-
-  while ((match = streamRegex.exec(raw)) !== null) {
-    const streamContent = match[1];
-    let decoded = '';
-
-    try {
-      decoded = zlib.inflateSync(Buffer.from(streamContent, 'latin1')).toString('latin1');
-    } catch {
-      decoded = streamContent;
-    }
-
-    if (decoded && (decoded.includes('Tj') || decoded.includes('TJ'))) {
-      // Extract standard single string operator: (text) Tj
-      const tjRegex = /\(([^)]+)\)\s*Tj/g;
-      let tj: RegExpExecArray | null;
-      while ((tj = tjRegex.exec(decoded)) !== null) {
-        if (tj[1] && tj[1].trim()) textChunks.push(tj[1].trim());
-      }
-
-      // Extract array text operator: [(text) 20 (more text)] TJ
-      const arrRegex = /\[([^\]]+)\]\s*TJ/g;
-      let arrMatch: RegExpExecArray | null;
-      while ((arrMatch = arrRegex.exec(decoded)) !== null) {
-        const parts = arrMatch[1].match(/\(([^)]+)\)/g);
-        if (parts && parts.length > 0) {
-          const joined = parts.map((p) => p.slice(1, -1)).join('');
-          if (joined.trim()) textChunks.push(joined.trim());
-        }
-      }
-    }
-  }
-
-  return textChunks.join('\n');
-}
-
-/**
- * Call Mistral OCR directly via REST API with base64 data URL
- */
-async function callMistralOcrApi(apiKey: string, base64Pdf: string): Promise<string> {
-  const response = await fetch('https://api.mistral.ai/v1/ocr', {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: 'mistral-ocr-latest',
-      document: {
-        type: 'document_url',
-        document_url: `data:application/pdf;base64,${base64Pdf}`,
+const rfqResponseSchema = {
+  type: Type.OBJECT,
+  properties: {
+    customer: {
+      type: Type.OBJECT,
+      properties: {
+        companyName: { type: Type.STRING, description: 'Customer or company name' },
+        address: { type: Type.STRING, description: 'Customer physical or mailing address' },
+        contactName: { type: Type.STRING, description: 'Contact person or buyer name' },
+        email: { type: Type.STRING, description: 'Customer contact email' },
+        phone: { type: Type.STRING, description: 'Customer telephone number' },
+        country: { type: Type.STRING, description: 'Customer country' },
+        customerReference: { type: Type.STRING, description: 'Customer reference or internal project number' },
       },
-    }),
-  });
-
-  if (!response.ok) {
-    const errorBody = await response.text();
-    throw new Error(`Mistral OCR API returned HTTP ${response.status}: ${errorBody}`);
-  }
-
-  const json = await response.json();
-  if (json && json.pages && Array.isArray(json.pages)) {
-    return json.pages
-      .map((p: any, idx: number) => `--- PAGE ${idx + 1} ---\n${p.markdown || ''}`)
-      .join('\n\n');
-  }
-
-  return '';
-}
+    },
+    rfq: {
+      type: Type.OBJECT,
+      properties: {
+        rfqNumber: { type: Type.STRING, description: 'RFQ or enquiry number' },
+        rfqDate: { type: Type.STRING, description: 'RFQ issue date' },
+        dueDate: { type: Type.STRING, description: 'Quotation submission deadline / due date' },
+        currency: { type: Type.STRING, description: 'Quotation currency requested (e.g. USD, EUR, GBP)' },
+        requestedDeliveryDate: { type: Type.STRING, description: 'Overall requested delivery date' },
+        deliveryLocation: { type: Type.STRING, description: 'Delivery address or port/facility' },
+        incoterms: { type: Type.STRING, description: 'Incoterms (e.g. EXW, FOB, CIF, DDP)' },
+      },
+    },
+    equipment: {
+      type: Type.ARRAY,
+      description: 'Major equipment, systems, or machines referenced in the RFQ',
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          type: { type: Type.STRING, description: 'Equipment type (e.g. Centrifugal Pump, Compressor, Turbine)' },
+          model: { type: Type.STRING, description: 'Equipment model designation' },
+          manufacturer: { type: Type.STRING, description: 'Equipment OEM / manufacturer name' },
+          serialNumber: { type: Type.STRING, description: 'Equipment serial number' },
+          tagNumber: { type: Type.STRING, description: 'Plant or unit tag number (e.g. P-101A)' },
+          description: { type: Type.STRING, description: 'Equipment description or service' },
+          otherIdentification: { type: Type.STRING, description: 'Any other equipment identifier' },
+        },
+      },
+    },
+    lineItems: {
+      type: Type.ARRAY,
+      description: 'Every requested part, component, assembly, or service line item',
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          lineNumber: { type: Type.STRING, description: 'Line number (e.g. 1, 10, Item 01)' },
+          partNumber: { type: Type.STRING, description: 'Exact manufacturer or OEM part number, preserving punctuation' },
+          customerPartNumber: { type: Type.STRING, description: 'Customer-specific internal part number if different' },
+          drawingNumber: { type: Type.STRING, description: 'Engineering or manufacturing drawing number' },
+          description: { type: Type.STRING, description: 'Detailed item description or specification' },
+          quantity: { type: Type.STRING, description: 'Requested quantity as a string or number' },
+          unit: { type: Type.STRING, description: 'Unit of measure (e.g. EA, PC, SET, MTR, KG)' },
+          equipmentSerialNumber: { type: Type.STRING, description: 'Specific equipment serial number this part belongs to' },
+          revision: { type: Type.STRING, description: 'Drawing or part revision number/letter' },
+          material: { type: Type.STRING, description: 'Material grade or specification' },
+          requestedDeliveryDate: { type: Type.STRING, description: 'Item-specific delivery deadline' },
+          notes: { type: Type.STRING, description: 'Item notes, testing requirements, or special instructions' },
+        },
+      },
+    },
+    requirements: {
+      type: Type.OBJECT,
+      properties: {
+        technical: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Technical specifications and standards' },
+        commercial: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Commercial terms and payment requirements' },
+        certifications: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Material test certificates (EN 10204 3.1/3.2, etc.)' },
+        inspection: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Inspection, PMI, NDT, or witness requirements' },
+        packaging: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Export packaging, rust protection, crate requirements' },
+        shipping: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Shipping markings and dispatch instructions' },
+        specialInstructions: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Special customer notes or compliance instructions' },
+      },
+    },
+    additionalInformation: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: 'Other relevant information in the RFQ not captured elsewhere',
+    },
+    reviewFlags: {
+      type: Type.ARRAY,
+      items: { type: Type.STRING },
+      description: 'Items or values that may require human clarification or have ambiguities in the source',
+    },
+  },
+};
 
 export async function handleAnalyzeRfq(req: Request, res: Response): Promise<void> {
   const startTime = Date.now();
 
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-
-  if (req.method === 'OPTIONS') {
-    res.status(200).end();
-    return;
-  }
-
-  // Diagnostic GET endpoint
-  if (req.method === 'GET') {
-    const hasKey = Boolean(
-      process.env.MISTRAL_API_KEY &&
-      process.env.MISTRAL_API_KEY.trim() !== '' &&
-      process.env.MISTRAL_API_KEY !== 'your_mistral_api_key_here'
-    );
-    res.status(200).json({
-      status: 'ok',
-      endpoint: '/api/analyze-rfq',
-      hasMistralKey: hasKey,
-      message: hasKey
-        ? 'Mistral API key is configured. Ready to accept POST requests.'
-        : 'MISTRAL_API_KEY is not configured. Please add MISTRAL_API_KEY to your Vercel Environment Variables.',
-    });
-    return;
-  }
-
   try {
-    const apiKey = process.env.MISTRAL_API_KEY;
+    const apiKey = process.env.GEMINI_API_KEY;
 
-    if (!apiKey || apiKey.trim() === '' || apiKey === 'your_mistral_api_key_here') {
+    // Guardrail: Check API key presence
+    if (!apiKey || apiKey.trim() === '' || apiKey === 'MY_GEMINI_API_KEY') {
       res.status(503).json({
-        error: 'The Mistral API is not configured. Please configure MISTRAL_API_KEY in Vercel environment variables (Settings > Environment Variables).',
+        error: 'The Gemini API is not configured. Please configure GEMINI_API_KEY in the environment secrets.',
         code: 'KEY_NOT_CONFIGURED',
       });
       return;
     }
 
-    let body = req.body;
-    if (typeof body === 'string') {
-      try {
-        body = JSON.parse(body);
-      } catch (e) {
-        // use raw
-      }
-    }
-
-    const { pdfBase64, fileName, fileSizeBytes } = body || {};
+    const { pdfBase64, fileName, fileSizeBytes } = req.body;
 
     if (!pdfBase64 || typeof pdfBase64 !== 'string') {
       res.status(400).json({
@@ -252,6 +141,8 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       return;
     }
 
+    // Basic PDF validation: Check base64 header or content
+    // Base64 for "%PDF" is "JVBERi"
     const trimmedBase64 = pdfBase64.replace(/\s/g, '');
     if (!trimmedBase64.startsWith('JVBERi')) {
       res.status(400).json({
@@ -261,6 +152,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       return;
     }
 
+    // Size limit check (25MB base64 ~ 18MB binary)
     if (trimmedBase64.length > 35 * 1024 * 1024) {
       res.status(413).json({
         error: 'The uploaded PDF exceeds the supported file size limit (20 MB). Please reduce file size or select another document.',
@@ -269,133 +161,59 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       return;
     }
 
-    const fileBuffer = Buffer.from(trimmedBase64, 'base64');
-    let documentContent = '';
-    let extractionSource = '';
-    const diagnostics: string[] = [];
-
-    // Strategy 1: Fast zero-dependency native PDF text extraction
-    try {
-      const pureText = extractPureTextFromPdf(fileBuffer);
-      if (pureText && pureText.length > 40) {
-        documentContent = pureText;
-        extractionSource = 'native-pdf-text';
-      } else {
-        diagnostics.push(`Native PDF text extractor found ${pureText ? pureText.length : 0} characters.`);
-      }
-    } catch (pureErr: any) {
-      diagnostics.push(`Native PDF text extractor notice: ${pureErr?.message}`);
-    }
-
-    // Strategy 2: If native text extraction yielded little text, try Mistral OCR API
-    if (!documentContent) {
-      try {
-        const ocrText = await callMistralOcrApi(apiKey, trimmedBase64);
-        if (ocrText && ocrText.length > 20) {
-          documentContent = ocrText;
-          extractionSource = 'mistral-ocr-api';
-        } else {
-          diagnostics.push('Mistral OCR API returned empty pages.');
-        }
-      } catch (ocrErr: any) {
-        diagnostics.push(`Mistral OCR API notice: ${ocrErr?.message}`);
-      }
-    }
-
-    // Strategy 3: Try Mistral SDK files upload + OCR if previous direct REST call failed
-    if (!documentContent) {
-      const client = new Mistral({ apiKey });
-      let uploadedFileId: string | null = null;
-      try {
-        const uploadedFile = await client.files.upload({
-          file: {
-            fileName: fileName || 'rfq_document.pdf',
-            content: new Uint8Array(fileBuffer),
-          },
-          purpose: 'ocr' as any,
-        });
-
-        if (uploadedFile && uploadedFile.id) {
-          uploadedFileId = uploadedFile.id;
-          const ocrRes = await client.ocr.process({
-            model: 'mistral-ocr-latest',
-            document: {
-              type: 'file',
-              fileId: uploadedFile.id,
-            },
-          });
-
-          if (ocrRes && ocrRes.pages && ocrRes.pages.length > 0) {
-            documentContent = ocrRes.pages
-              .map((p, idx) => `--- PAGE ${idx + 1} ---\n${p.markdown || ''}`)
-              .join('\n\n');
-            extractionSource = 'mistral-sdk-ocr';
-          }
-        }
-      } catch (sdkOcrErr: any) {
-        diagnostics.push(`Mistral SDK OCR notice: ${sdkOcrErr?.message}`);
-      } finally {
-        if (uploadedFileId) {
-          try {
-            await client.files.delete({ fileId: uploadedFileId });
-          } catch {
-            // ignore
-          }
-        }
-      }
-    }
-
-    // If all strategies failed, report detailed diagnostics so user knows why
-    if (!documentContent || documentContent.trim().length === 0) {
-      res.status(422).json({
-        error: 'The document was analyzed, but no text or quotation tables could be identified.',
-        code: 'EMPTY_RESPONSE',
-        diagnostics: diagnostics.join(' | '),
-        hint: 'If your PDF is a scanned image or photograph, please verify that your Mistral account has OCR enabled, or provide a standard digital PDF with selectable text.',
-      });
-      return;
-    }
-
-    // Strategy 4: Pass the extracted document text into Mistral Large
-    const client = new Mistral({ apiKey });
-    const chatResponse = await client.chat.complete({
-      model: 'mistral-large-latest',
-      responseFormat: { type: 'json_object' },
-      temperature: 0.1,
-      messages: [
-        {
-          role: 'system',
-          content: `${RFQ_SYSTEM_INSTRUCTION}\n\nYou must return a valid JSON object matching this schema exactly:\n${JSON_SCHEMA_TEMPLATE}`,
+    // Initialize official GoogleGenAI SDK
+    const ai = new GoogleGenAI({
+      apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
         },
-        {
-          role: 'user',
-          content: `Extract the RFQ quotation details, line items, and equipment serials from this RFQ document content:\n\n${documentContent}`,
-        },
-      ],
+      },
     });
 
-    const rawText = typeof chatResponse.choices?.[0]?.message?.content === 'string'
-      ? chatResponse.choices[0].message.content
-      : '';
+    const filePart = {
+      inlineData: {
+        mimeType: 'application/pdf',
+        data: trimmedBase64,
+      },
+    };
+
+    const promptPart = {
+      text: 'Perform an exhaustive industrial RFQ extraction on this entire document. Extract all customer details, RFQ commercial details, equipment identification (models, manufacturers, serial numbers, tags), every single line item requested with exact part numbers and drawing numbers, and all technical/commercial requirements. Preserve exact identifiers without reinterpreting them.',
+    };
+
+    // Call Gemini 3.8 Flash model with structured JSON output
+    const response = await ai.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: {
+        parts: [filePart, promptPart],
+      },
+      config: {
+        systemInstruction: RFQ_SYSTEM_INSTRUCTION,
+        responseMimeType: 'application/json',
+        responseSchema: rfqResponseSchema,
+        temperature: 0.1, // Low temperature for high precision and zero hallucination
+      },
+    });
+
+    const rawText = response.text;
 
     if (!rawText || rawText.trim() === '') {
       res.status(422).json({
-        error: 'Mistral Large model returned an empty quotation response. Please try again.',
+        error: 'The document was analyzed, but no RFQ information could be identified. Please ensure the PDF contains readable text or quotation tables.',
         code: 'EMPTY_RESPONSE',
-        diagnostics: diagnostics.join(' | '),
       });
       return;
     }
 
     let parsedData: any;
     try {
-      parsedData = cleanAndParseJson(rawText);
-    } catch (parseError: any) {
-      console.error('Failed to parse Mistral response JSON:', parseError, 'Raw response:', rawText);
+      parsedData = JSON.parse(rawText);
+    } catch (parseError) {
+      console.error('Failed to parse Gemini response JSON:', parseError);
       res.status(500).json({
-        error: "We couldn't analyze this document. The extracted data could not be parsed into JSON. Please try again.",
+        error: 'We could not analyze this document. The extracted data could not be parsed. Please try again.',
         code: 'PARSE_ERROR',
-        rawSample: rawText.slice(0, 300),
       });
       return;
     }
@@ -409,39 +227,34 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
         fileName: fileName || 'RFQ-Document.pdf',
         fileSizeBytes: fileSizeBytes || 0,
         extractedAt: new Date().toISOString(),
-        modelUsed: `mistral-large-latest (${extractionSource})`,
+        modelUsed: 'gemini-3.8-flash',
         processingTimeMs,
       },
     });
   } catch (error: any) {
-    console.error('Error during Mistral RFQ analysis:', error);
+    console.error('Error during RFQ analysis:', error);
     const errorMessage = error?.message || '';
 
-    if (errorMessage.includes('401') || errorMessage.includes('Unauthorized') || errorMessage.includes('API key')) {
-      res.status(503).json({
-        error: 'The Mistral API key is invalid or unauthorized. Please verify MISTRAL_API_KEY in Vercel Settings > Environment Variables.',
-        code: 'INVALID_API_KEY',
-      });
-      return;
-    }
-
-    if (errorMessage.includes('429') || errorMessage.includes('quota') || errorMessage.includes('Rate limit')) {
+    if (errorMessage.includes('RESOURCE_EXHAUSTED') || errorMessage.includes('quota')) {
       res.status(429).json({
-        error: 'Mistral API rate limit or quota reached. Please check your Mistral account balance and try again.',
+        error: 'Gemini API quota or rate limit reached. Please wait a moment and try again.',
         code: 'RATE_LIMITED',
       });
       return;
     }
 
+    if (errorMessage.includes('API_KEY_INVALID') || errorMessage.includes('unauthenticated')) {
+      res.status(503).json({
+        error: 'The Gemini API key is invalid. Please contact the administrator.',
+        code: 'INVALID_API_KEY',
+      });
+      return;
+    }
+
     res.status(500).json({
-      error: error?.message || "We couldn't analyze this document. Please try again or verify that the PDF is not password-protected.",
-      code: 'MISTRAL_ERROR',
+      error: "We couldn't analyze this document. Please try again or check that the PDF is not password protected.",
+      code: 'GEMINI_ERROR',
       details: process.env.NODE_ENV !== 'production' ? errorMessage : undefined,
     });
   }
-}
-
-// Vercel Serverless Function Default Export
-export default async function handler(req: any, res: any) {
-  return handleAnalyzeRfq(req, res);
 }

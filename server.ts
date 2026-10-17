@@ -19,7 +19,7 @@ async function startServer() {
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   // API Routes
-  app.all('/api/analyze-rfq', (req, res) => {
+  app.post('/api/analyze-rfq', (req, res) => {
     handleAnalyzeRfq(req, res);
   });
 
@@ -27,7 +27,7 @@ async function startServer() {
   app.get('/api/health', (req, res) => {
     res.json({
       status: 'ok',
-      hasMistralKey: Boolean(process.env.MISTRAL_API_KEY && process.env.MISTRAL_API_KEY !== 'your_mistral_api_key_here'),
+      hasGeminiKey: Boolean(process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'),
     });
   });
 

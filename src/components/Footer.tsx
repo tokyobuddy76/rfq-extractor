@@ -8,12 +8,12 @@ export const Footer: React.FC = () => {
         <div className="flex items-center space-x-2">
           <Sparkles className="w-4 h-4 text-blue-600" />
           <span className="font-semibold text-slate-700">
-            Document extraction powered by Mistral AI
+            Document extraction powered by Google Gemini
           </span>
         </div>
 
         <div className="text-[11px] text-slate-400 max-w-xl">
-          Mistral AI extracts information strictly based on the content of the provided document. All quotation details, pricing, part numbers, and quantities must be independently verified and approved by authorized personnel prior to commercial quotation.
+          Google Gemini extracts information strictly based on the content of the provided document. All quotation details, pricing, part numbers, and quantities must be independently verified and approved by authorized personnel prior to commercial quotation.
         </div>
       </div>
     </footer>

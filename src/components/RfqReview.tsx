@@ -211,7 +211,7 @@ export const RfqReview: React.FC<RfqReviewProps> = ({
               Human Verification Required:
             </span>
             <span>
-              All data was machine-extracted by Mistral AI directly from your RFQ document. The quotation engineer must review and approve all part numbers, equipment tags, drawing numbers, and quantities before creating quotations or orders.
+              All data was machine-extracted by Google Gemini directly from your RFQ document. The quotation engineer must review and approve all part numbers, equipment tags, drawing numbers, and quantities before creating quotations or orders.
             </span>
           </div>
         </div>
@@ -225,7 +225,7 @@ export const RfqReview: React.FC<RfqReviewProps> = ({
           <button
             type="button"
             onClick={onResetToOriginal}
-            title="Reset all values to the original Mistral AI extraction"
+            title="Reset all values to the original Gemini extraction"
             className="inline-flex items-center space-x-1 px-2.5 py-1 text-slate-700 hover:text-slate-900 bg-white border border-slate-300 rounded hover:bg-slate-50 transition-colors text-xs"
           >
             <RotateCcw className="w-3 h-3 text-slate-500" />
