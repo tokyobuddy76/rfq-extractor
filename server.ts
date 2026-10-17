@@ -19,7 +19,7 @@ async function startServer() {
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
   // API Routes
-  app.post('/api/analyze-rfq', (req, res) => {
+  app.all('/api/analyze-rfq', (req, res) => {
     handleAnalyzeRfq(req, res);
   });
 

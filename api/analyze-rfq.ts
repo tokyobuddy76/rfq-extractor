@@ -1,6 +1,17 @@
 import type { Request, Response } from 'express';
 import { GoogleGenAI, Type } from '@google/genai';
 
+// Vercel Serverless Function Configuration
+export const config = {
+  api: {
+    bodyParser: {
+      sizeLimit: '25mb',
+    },
+  },
+};
+
+export const maxDuration = 60; // 60s timeout for large multi-page PDF analysis
+
 const RFQ_SYSTEM_INSTRUCTION = `You are an industrial RFQ document extraction system.
 
 Analyze the entire supplied PDF.
@@ -72,66 +83,106 @@ const rfqResponseSchema = {
     },
     lineItems: {
       type: Type.ARRAY,
-      description: 'Every requested part, component, assembly, or service line item',
+      description: 'All requested quotation line items (spare parts, assemblies, components, or equipment)',
       items: {
         type: Type.OBJECT,
         properties: {
-          lineNumber: { type: Type.STRING, description: 'Line number (e.g. 1, 10, Item 01)' },
-          partNumber: { type: Type.STRING, description: 'Exact manufacturer or OEM part number, preserving punctuation' },
-          customerPartNumber: { type: Type.STRING, description: 'Customer-specific internal part number if different' },
-          drawingNumber: { type: Type.STRING, description: 'Engineering or manufacturing drawing number' },
-          description: { type: Type.STRING, description: 'Detailed item description or specification' },
-          quantity: { type: Type.STRING, description: 'Requested quantity as a string or number' },
-          unit: { type: Type.STRING, description: 'Unit of measure (e.g. EA, PC, SET, MTR, KG)' },
-          equipmentSerialNumber: { type: Type.STRING, description: 'Specific equipment serial number this part belongs to' },
-          revision: { type: Type.STRING, description: 'Drawing or part revision number/letter' },
-          material: { type: Type.STRING, description: 'Material grade or specification' },
-          requestedDeliveryDate: { type: Type.STRING, description: 'Item-specific delivery deadline' },
-          notes: { type: Type.STRING, description: 'Item notes, testing requirements, or special instructions' },
+          lineNumber: { type: Type.STRING, description: 'Line or item number exactly as stated' },
+          partNumber: { type: Type.STRING, description: 'Exact OEM or manufacturer part number' },
+          customerPartNumber: { type: Type.STRING, description: 'Customer-specific internal material or part number' },
+          drawingNumber: { type: Type.STRING, description: 'Technical drawing or blueprint number' },
+          description: { type: Type.STRING, description: 'Item description or specification' },
+          quantity: { type: Type.STRING, description: 'Quantity requested' },
+          unit: { type: Type.STRING, description: 'Unit of measure (e.g. EA, PC, SET, M, KG)' },
+          equipmentSerialNumber: { type: Type.STRING, description: 'Associated equipment serial or tag number if specified' },
+          revision: { type: Type.STRING, description: 'Revision level or letter' },
+          material: { type: Type.STRING, description: 'Material grade or standard' },
+          requestedDeliveryDate: { type: Type.STRING, description: 'Requested delivery date for this specific line item' },
+          notes: { type: Type.STRING, description: 'Line-specific instructions or remarks' },
         },
+        required: ['lineNumber'],
       },
     },
     requirements: {
       type: Type.OBJECT,
+      description: 'Specific commercial, technical, and compliance requirements',
       properties: {
-        technical: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Technical specifications and standards' },
-        commercial: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Commercial terms and payment requirements' },
-        certifications: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Material test certificates (EN 10204 3.1/3.2, etc.)' },
-        inspection: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Inspection, PMI, NDT, or witness requirements' },
-        packaging: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Export packaging, rust protection, crate requirements' },
-        shipping: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Shipping markings and dispatch instructions' },
-        specialInstructions: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Special customer notes or compliance instructions' },
+        technical: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Technical specifications, standards, or performance tolerances' },
+        commercial: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Commercial terms, validity, or payment milestones' },
+        certifications: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Certifications required (e.g. Mill test certificate 3.1, ATEX, NACE, ISO)' },
+        inspection: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Inspection, PMI, hydrostatic testing, or witness requirements' },
+        packaging: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Export preservation, crating, or tropical packaging requirements' },
+        shipping: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Shipping terms, preferred freight mode, or destination port' },
+        specialInstructions: { type: Type.ARRAY, items: { type: Type.STRING }, description: 'Any special buyer instructions, penalties, or compliance clauses' },
       },
     },
     additionalInformation: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description: 'Other relevant information in the RFQ not captured elsewhere',
+      description: 'Any notable context, project background, or unclassified information',
     },
     reviewFlags: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description: 'Items or values that may require human clarification or have ambiguities in the source',
+      description: 'Items requiring human verification (ambiguous part numbers, conflicting dates, missing tags)',
     },
   },
+  required: ['customer', 'rfq', 'equipment', 'lineItems', 'requirements'],
 };
 
 export async function handleAnalyzeRfq(req: Request, res: Response): Promise<void> {
   const startTime = Date.now();
 
-  try {
-    const apiKey = process.env.GEMINI_API_KEY;
+  // Set CORS headers for cross-origin and preflight requests
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
-    // Guardrail: Check API key presence
+  if (req.method === 'OPTIONS') {
+    res.status(200).end();
+    return;
+  }
+
+  // GET request diagnostic helper
+  if (req.method === 'GET') {
+    const hasKey = Boolean(
+      (process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY') ||
+      (process.env.API_KEY && process.env.API_KEY !== 'MY_GEMINI_API_KEY')
+    );
+    res.status(200).json({
+      status: 'ok',
+      endpoint: '/api/analyze-rfq',
+      hasGeminiKey: hasKey,
+      message: hasKey
+        ? 'Gemini API is configured. Ready to accept POST requests with { pdfBase64: string }.'
+        : 'GEMINI_API_KEY is not configured. Please add GEMINI_API_KEY to your Vercel Environment Variables.',
+    });
+    return;
+  }
+
+  try {
+    const apiKey = process.env.GEMINI_API_KEY || process.env.API_KEY;
+
+    // Guardrail: Check Gemini API key presence
     if (!apiKey || apiKey.trim() === '' || apiKey === 'MY_GEMINI_API_KEY') {
       res.status(503).json({
-        error: 'The Gemini API is not configured. Please configure GEMINI_API_KEY in the environment secrets.',
+        error: 'The Gemini API is not configured. Please configure GEMINI_API_KEY in Vercel environment variables (Settings > Environment Variables).',
         code: 'KEY_NOT_CONFIGURED',
       });
       return;
     }
 
-    const { pdfBase64, fileName, fileSizeBytes } = req.body;
+    // Safely parse body if sent as string or object
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        // use raw
+      }
+    }
+
+    const { pdfBase64, fileName, fileSizeBytes } = body || {};
 
     if (!pdfBase64 || typeof pdfBase64 !== 'string') {
       res.status(400).json({
@@ -141,8 +192,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Basic PDF validation: Check base64 header or content
-    // Base64 for "%PDF" is "JVBERi"
+    // Basic PDF validation: Check base64 header (%PDF magic bytes in base64 start with JVBERi)
     const trimmedBase64 = pdfBase64.replace(/\s/g, '');
     if (!trimmedBase64.startsWith('JVBERi')) {
       res.status(400).json({
@@ -245,16 +295,21 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
 
     if (errorMessage.includes('API_KEY_INVALID') || errorMessage.includes('unauthenticated')) {
       res.status(503).json({
-        error: 'The Gemini API key is invalid. Please contact the administrator.',
+        error: 'The Gemini API key is invalid. Please verify GEMINI_API_KEY in Vercel Settings > Environment Variables.',
         code: 'INVALID_API_KEY',
       });
       return;
     }
 
     res.status(500).json({
-      error: "We couldn't analyze this document. Please try again or check that the PDF is not password protected.",
+      error: error?.message || "We couldn't analyze this document. Please try again or check that the PDF is not password protected.",
       code: 'GEMINI_ERROR',
       details: process.env.NODE_ENV !== 'production' ? errorMessage : undefined,
     });
   }
+}
+
+// Vercel Serverless Function Default Export
+export default async function handler(req: any, res: any) {
+  return handleAnalyzeRfq(req, res);
 }

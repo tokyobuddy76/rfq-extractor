@@ -53,15 +53,26 @@ export default function App() {
         }),
       });
 
-      const result = await response.json();
+      // Safely parse JSON or text to avoid JSON SyntaxError on serverless error pages
+      let result: any = null;
+      const contentType = response.headers.get('content-type') || '';
+      if (contentType.includes('application/json')) {
+        result = await response.json();
+      } else {
+        const text = await response.text();
+        result = {
+          error: `Server returned HTTP ${response.status}: ${text.slice(0, 180)}`,
+          code: `HTTP_${response.status}`,
+        };
+      }
 
       if (!response.ok) {
         // Plain language error mapping as mandated by Sub-goal 3
         const code = result.code || `HTTP_${response.status}`;
         let userMessage = result.error || "We couldn't analyze this document. Please try again.";
 
-        if (response.status === 503) {
-          userMessage = 'The Gemini API is not configured. Please contact the administrator.';
+        if (response.status === 503 || code === 'KEY_NOT_CONFIGURED') {
+          userMessage = 'The Gemini API is not configured. Please configure GEMINI_API_KEY in Vercel environment variables (Settings > Environment Variables).';
         } else if (response.status === 422 || code === 'EMPTY_RESPONSE') {
           userMessage = 'The document was analyzed, but no RFQ information could be identified.';
         }
