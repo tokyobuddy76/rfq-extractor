@@ -190,7 +190,7 @@ export const PdfUploader: React.FC<PdfUploaderProps> = ({
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-slate-100">
             <div className="flex items-center space-x-2 text-xs text-slate-500">
               <Shield className="w-4 h-4 text-slate-400" />
-              <span>Confidential: RFQs are processed securely via server-side Gemini</span>
+              <span>Confidential: RFQs are processed securely via server-side Mistral AI</span>
             </div>
 
             <button

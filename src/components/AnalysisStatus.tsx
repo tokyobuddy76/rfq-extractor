@@ -59,7 +59,7 @@ export const AnalysisStatus: React.FC<AnalysisStatusProps> = ({
           </div>
           <div className="flex items-center space-x-2">
             <Loader2 className="w-4 h-4 text-blue-600 animate-spin flex-shrink-0" />
-            <span className="text-slate-800">Reading RFQ tables, part numbers & equipment serials via Gemini</span>
+            <span className="text-slate-800">Reading RFQ tables, part numbers & equipment serials via Mistral AI</span>
           </div>
           <div className="flex items-center space-x-2 opacity-60">
             <div className="w-4 h-4 rounded-full border border-slate-300 flex items-center justify-center text-[9px] text-slate-400">
@@ -70,7 +70,7 @@ export const AnalysisStatus: React.FC<AnalysisStatusProps> = ({
         </div>
 
         <p className="text-[11px] text-slate-400">
-          Document extraction powered by Google Gemini. Part numbers and drawing numbers are captured verbatim without alterations.
+          Document extraction powered by Mistral AI. Part numbers and drawing numbers are captured verbatim without alterations.
         </p>
 
         <div>

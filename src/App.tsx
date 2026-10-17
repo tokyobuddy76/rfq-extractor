@@ -61,7 +61,7 @@ export default function App() {
         let userMessage = result.error || "We couldn't analyze this document. Please try again.";
 
         if (response.status === 503) {
-          userMessage = 'The Gemini API is not configured. Please contact the administrator.';
+          userMessage = 'The Mistral API is not configured. Please configure MISTRAL_API_KEY in Vercel environment variables.';
         } else if (response.status === 422 || code === 'EMPTY_RESPONSE') {
           userMessage = 'The document was analyzed, but no RFQ information could be identified.';
         }
@@ -113,7 +113,7 @@ export default function App() {
       fileName: sampleFileName,
       fileSizeBytes: 482910,
       extractedAt: new Date().toISOString(),
-      modelUsed: 'gemini-3.8-flash',
+      modelUsed: 'mistral-ocr-latest / mistral-large-latest',
       processingTimeMs: 1840,
     });
     setActiveFile(null);
@@ -151,7 +151,7 @@ export default function App() {
   const handleResetToOriginal = () => {
     if (!originalRfqData) return;
     const confirmReset = window.confirm(
-      'Are you sure you want to revert all manual edits and reset to the original Gemini extraction?'
+      'Are you sure you want to revert all manual edits and reset to the original Mistral AI extraction?'
     );
     if (confirmReset) {
       setCurrentRfqData(JSON.parse(JSON.stringify(originalRfqData)));
