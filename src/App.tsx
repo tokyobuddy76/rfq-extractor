@@ -62,6 +62,14 @@ export default function App() {
 
         if (response.status === 503) {
           userMessage = 'The Mistral API is not configured. Please configure MISTRAL_API_KEY in Vercel environment variables.';
+        } else if (result.error) {
+          userMessage = result.error;
+          if (result.hint) {
+            userMessage += `\n\n${result.hint}`;
+          }
+          if (result.diagnostics) {
+            userMessage += `\n\nDiagnostics: ${result.diagnostics}`;
+          }
         } else if (response.status === 422 || code === 'EMPTY_RESPONSE') {
           userMessage = 'The document was analyzed, but no RFQ information could be identified.';
         }
@@ -69,7 +77,6 @@ export default function App() {
         setAnalysisError(userMessage);
         setAnalysisErrorCode(code);
         setIsAnalyzing(false);
-        // Important: Never display fake or sample RFQ data when an API request fails.
         return;
       }
 

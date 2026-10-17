@@ -1,6 +1,6 @@
 import type { Request, Response } from 'express';
 import { Mistral } from '@mistralai/mistralai';
-import { PDFParse } from 'pdf-parse';
+import zlib from 'node:zlib';
 
 // Vercel Serverless Function Configuration
 export const config = {
@@ -100,11 +100,9 @@ const JSON_SCHEMA_TEMPLATE = `{
 
 function cleanAndParseJson(text: string): any {
   let cleaned = text.trim();
-  // Strip ```json and ``` code blocks if present
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
   }
-  // If there are leading or trailing characters outside { ... }
   const firstBrace = cleaned.indexOf('{');
   const lastBrace = cleaned.lastIndexOf('}');
   if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
@@ -113,24 +111,90 @@ function cleanAndParseJson(text: string): any {
   return JSON.parse(cleaned);
 }
 
-async function extractTextFromPdfBuffer(buffer: Buffer): Promise<string> {
-  try {
-    const uint8Data = new Uint8Array(buffer);
-    const parser = new PDFParse(uint8Data);
-    const result = await parser.getText();
-    if (result && typeof result.text === 'string' && result.text.trim().length > 20) {
-      return result.text.trim();
+/**
+ * Pure Node.js zero-dependency PDF text extractor.
+ * Handles both uncompressed text and FlateDecode streams using built-in zlib.
+ * Never fails due to missing canvas, workers, or font assets.
+ */
+function extractPureTextFromPdf(buffer: Buffer): string {
+  const textChunks: string[] = [];
+  const raw = buffer.toString('latin1');
+
+  // Match all PDF streams
+  const streamRegex = /stream\r?\n([\s\S]*?)\r?\nendstream/g;
+  let match: RegExpExecArray | null;
+
+  while ((match = streamRegex.exec(raw)) !== null) {
+    const streamContent = match[1];
+    let decoded = '';
+
+    try {
+      decoded = zlib.inflateSync(Buffer.from(streamContent, 'latin1')).toString('latin1');
+    } catch {
+      decoded = streamContent;
     }
-  } catch (err: any) {
-    console.warn('Direct PDF text extraction note:', err?.message);
+
+    if (decoded && (decoded.includes('Tj') || decoded.includes('TJ'))) {
+      // Extract standard single string operator: (text) Tj
+      const tjRegex = /\(([^)]+)\)\s*Tj/g;
+      let tj: RegExpExecArray | null;
+      while ((tj = tjRegex.exec(decoded)) !== null) {
+        if (tj[1] && tj[1].trim()) textChunks.push(tj[1].trim());
+      }
+
+      // Extract array text operator: [(text) 20 (more text)] TJ
+      const arrRegex = /\[([^\]]+)\]\s*TJ/g;
+      let arrMatch: RegExpExecArray | null;
+      while ((arrMatch = arrRegex.exec(decoded)) !== null) {
+        const parts = arrMatch[1].match(/\(([^)]+)\)/g);
+        if (parts && parts.length > 0) {
+          const joined = parts.map((p) => p.slice(1, -1)).join('');
+          if (joined.trim()) textChunks.push(joined.trim());
+        }
+      }
+    }
   }
+
+  return textChunks.join('\n');
+}
+
+/**
+ * Call Mistral OCR directly via REST API with base64 data URL
+ */
+async function callMistralOcrApi(apiKey: string, base64Pdf: string): Promise<string> {
+  const response = await fetch('https://api.mistral.ai/v1/ocr', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      model: 'mistral-ocr-latest',
+      document: {
+        type: 'document_url',
+        document_url: `data:application/pdf;base64,${base64Pdf}`,
+      },
+    }),
+  });
+
+  if (!response.ok) {
+    const errorBody = await response.text();
+    throw new Error(`Mistral OCR API returned HTTP ${response.status}: ${errorBody}`);
+  }
+
+  const json = await response.json();
+  if (json && json.pages && Array.isArray(json.pages)) {
+    return json.pages
+      .map((p: any, idx: number) => `--- PAGE ${idx + 1} ---\n${p.markdown || ''}`)
+      .join('\n\n');
+  }
+
   return '';
 }
 
 export async function handleAnalyzeRfq(req: Request, res: Response): Promise<void> {
   const startTime = Date.now();
 
-  // Set CORS headers
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
@@ -140,7 +204,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
     return;
   }
 
-  // GET request diagnostic helper
+  // Diagnostic GET endpoint
   if (req.method === 'GET') {
     const hasKey = Boolean(
       process.env.MISTRAL_API_KEY &&
@@ -152,7 +216,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       endpoint: '/api/analyze-rfq',
       hasMistralKey: hasKey,
       message: hasKey
-        ? 'Mistral API key is configured. Send a POST request with { pdfBase64: string } to analyze RFQs.'
+        ? 'Mistral API key is configured. Ready to accept POST requests.'
         : 'MISTRAL_API_KEY is not configured. Please add MISTRAL_API_KEY to your Vercel Environment Variables.',
     });
     return;
@@ -161,7 +225,6 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
   try {
     const apiKey = process.env.MISTRAL_API_KEY;
 
-    // Guardrail: Check Mistral API key presence
     if (!apiKey || apiKey.trim() === '' || apiKey === 'your_mistral_api_key_here') {
       res.status(503).json({
         error: 'The Mistral API is not configured. Please configure MISTRAL_API_KEY in Vercel environment variables (Settings > Environment Variables).',
@@ -170,13 +233,12 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Safely parse body if sent as string or object
     let body = req.body;
     if (typeof body === 'string') {
       try {
         body = JSON.parse(body);
       } catch (e) {
-        // keep as is
+        // use raw
       }
     }
 
@@ -190,7 +252,6 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Basic PDF validation: Check base64 header (%PDF magic bytes in base64 start with JVBERi)
     const trimmedBase64 = pdfBase64.replace(/\s/g, '');
     if (!trimmedBase64.startsWith('JVBERi')) {
       res.status(400).json({
@@ -200,7 +261,6 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Size limit check (25MB base64 ~ 18MB binary)
     if (trimmedBase64.length > 35 * 1024 * 1024) {
       res.status(413).json({
         error: 'The uploaded PDF exceeds the supported file size limit (20 MB). Please reduce file size or select another document.',
@@ -209,26 +269,42 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Convert base64 string to buffer
     const fileBuffer = Buffer.from(trimmedBase64, 'base64');
-
-    // Initialize Mistral AI SDK
-    const client = new Mistral({
-      apiKey,
-    });
-
     let documentContent = '';
-    let extractionSource = 'direct-text';
+    let extractionSource = '';
+    const diagnostics: string[] = [];
 
-    // Step 1: Extract native digital PDF text (instant, reliable, works on all PDF RFQs)
-    const directPdfText = await extractTextFromPdfBuffer(fileBuffer);
-    if (directPdfText && directPdfText.length > 30) {
-      documentContent = directPdfText;
-      extractionSource = 'pdf-text';
+    // Strategy 1: Fast zero-dependency native PDF text extraction
+    try {
+      const pureText = extractPureTextFromPdf(fileBuffer);
+      if (pureText && pureText.length > 40) {
+        documentContent = pureText;
+        extractionSource = 'native-pdf-text';
+      } else {
+        diagnostics.push(`Native PDF text extractor found ${pureText ? pureText.length : 0} characters.`);
+      }
+    } catch (pureErr: any) {
+      diagnostics.push(`Native PDF text extractor notice: ${pureErr?.message}`);
     }
 
-    // Step 2: If the PDF has little or no selectable digital text (e.g. scanned photocopy), use Mistral OCR
+    // Strategy 2: If native text extraction yielded little text, try Mistral OCR API
     if (!documentContent) {
+      try {
+        const ocrText = await callMistralOcrApi(apiKey, trimmedBase64);
+        if (ocrText && ocrText.length > 20) {
+          documentContent = ocrText;
+          extractionSource = 'mistral-ocr-api';
+        } else {
+          diagnostics.push('Mistral OCR API returned empty pages.');
+        }
+      } catch (ocrErr: any) {
+        diagnostics.push(`Mistral OCR API notice: ${ocrErr?.message}`);
+      }
+    }
+
+    // Strategy 3: Try Mistral SDK files upload + OCR if previous direct REST call failed
+    if (!documentContent) {
+      const client = new Mistral({ apiKey });
       let uploadedFileId: string | null = null;
       try {
         const uploadedFile = await client.files.upload({
@@ -241,8 +317,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
 
         if (uploadedFile && uploadedFile.id) {
           uploadedFileId = uploadedFile.id;
-
-          const ocrResponse = await client.ocr.process({
+          const ocrRes = await client.ocr.process({
             model: 'mistral-ocr-latest',
             document: {
               type: 'file',
@@ -250,35 +325,39 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
             },
           });
 
-          if (ocrResponse && ocrResponse.pages && ocrResponse.pages.length > 0) {
-            documentContent = ocrResponse.pages
-              .map((page, idx) => `--- PAGE ${idx + 1} ---\n${page.markdown || ''}`)
+          if (ocrRes && ocrRes.pages && ocrRes.pages.length > 0) {
+            documentContent = ocrRes.pages
+              .map((p, idx) => `--- PAGE ${idx + 1} ---\n${p.markdown || ''}`)
               .join('\n\n');
-            extractionSource = 'mistral-ocr';
+            extractionSource = 'mistral-sdk-ocr';
           }
         }
-      } catch (ocrErr: any) {
-        console.warn('Mistral OCR processing error:', ocrErr?.message);
+      } catch (sdkOcrErr: any) {
+        diagnostics.push(`Mistral SDK OCR notice: ${sdkOcrErr?.message}`);
       } finally {
         if (uploadedFileId) {
           try {
             await client.files.delete({ fileId: uploadedFileId });
-          } catch (e) {
+          } catch {
             // ignore
           }
         }
       }
     }
 
-    if (!documentContent.trim()) {
+    // If all strategies failed, report detailed diagnostics so user knows why
+    if (!documentContent || documentContent.trim().length === 0) {
       res.status(422).json({
-        error: 'The document was analyzed, but no text or quotation tables could be read. If this is a scanned photograph, please ensure high resolution or provide a digital PDF.',
+        error: 'The document was analyzed, but no text or quotation tables could be identified.',
         code: 'EMPTY_RESPONSE',
+        diagnostics: diagnostics.join(' | '),
+        hint: 'If your PDF is a scanned image or photograph, please verify that your Mistral account has OCR enabled, or provide a standard digital PDF with selectable text.',
       });
       return;
     }
 
-    // Step 3: Analyze extracted text using Mistral Large with structured JSON schema
+    // Strategy 4: Pass the extracted document text into Mistral Large
+    const client = new Mistral({ apiKey });
     const chatResponse = await client.chat.complete({
       model: 'mistral-large-latest',
       responseFormat: { type: 'json_object' },
@@ -301,8 +380,9 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
 
     if (!rawText || rawText.trim() === '') {
       res.status(422).json({
-        error: 'The document was analyzed, but Mistral AI returned an empty structured response. Please try again.',
+        error: 'Mistral Large model returned an empty quotation response. Please try again.',
         code: 'EMPTY_RESPONSE',
+        diagnostics: diagnostics.join(' | '),
       });
       return;
     }
@@ -310,11 +390,12 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
     let parsedData: any;
     try {
       parsedData = cleanAndParseJson(rawText);
-    } catch (parseError) {
+    } catch (parseError: any) {
       console.error('Failed to parse Mistral response JSON:', parseError, 'Raw response:', rawText);
       res.status(500).json({
-        error: "We couldn't analyze this document. The extracted data could not be parsed. Please try again.",
+        error: "We couldn't analyze this document. The extracted data could not be parsed into JSON. Please try again.",
         code: 'PARSE_ERROR',
+        rawSample: rawText.slice(0, 300),
       });
       return;
     }
@@ -353,7 +434,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
     }
 
     res.status(500).json({
-      error: "We couldn't analyze this document. Please try again or verify that the PDF is not password-protected.",
+      error: error?.message || "We couldn't analyze this document. Please try again or verify that the PDF is not password-protected.",
       code: 'MISTRAL_ERROR',
       details: process.env.NODE_ENV !== 'production' ? errorMessage : undefined,
     });

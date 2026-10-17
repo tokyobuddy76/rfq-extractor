@@ -97,9 +97,9 @@ export const AnalysisStatus: React.FC<AnalysisStatusProps> = ({
           <h2 className="text-xl font-bold text-slate-900">
             Analysis Failed
           </h2>
-          <p className="text-sm text-red-600 font-medium max-w-md mx-auto">
+          <div className="text-xs text-red-700 font-medium max-w-lg mx-auto text-left bg-red-50/80 p-3.5 rounded-lg border border-red-200/80 whitespace-pre-line leading-relaxed">
             {error}
-          </p>
+          </div>
           {errorCode && (
             <span className="inline-block text-[11px] font-mono bg-slate-100 text-slate-600 px-2 py-0.5 rounded border border-slate-200 mt-1">
               Error code: {errorCode}
