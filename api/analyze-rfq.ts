@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { Mistral } from '@mistralai/mistralai';
+import { PDFParse } from 'pdf-parse';
 
 // Vercel Serverless Function Configuration
 export const config = {
@@ -10,11 +11,11 @@ export const config = {
   },
 };
 
-export const maxDuration = 60; // Up to 60s for multi-page OCR & LLM processing
+export const maxDuration = 60; // 60s timeout for multi-page extraction
 
 const RFQ_SYSTEM_INSTRUCTION = `You are an industrial RFQ document extraction system powered by Mistral AI.
 
-Analyze the entire supplied document text, tables, and OCR content.
+Analyze the entire supplied document text, tables, and equipment schedules.
 
 Extract information exactly as written in the document.
 
@@ -36,7 +37,7 @@ Return every requested line item, not merely the first one.
 
 Capture important technical or commercial information that does not fit the predefined schema under additionalInformation.
 
-Return ONLY a valid JSON object without surrounding markdown code fences or conversational text.`;
+Return ONLY a valid JSON object conforming to the required schema without markdown code fences or conversational text.`;
 
 const JSON_SCHEMA_TEMPLATE = `{
   "customer": {
@@ -112,6 +113,20 @@ function cleanAndParseJson(text: string): any {
   return JSON.parse(cleaned);
 }
 
+async function extractTextFromPdfBuffer(buffer: Buffer): Promise<string> {
+  try {
+    const uint8Data = new Uint8Array(buffer);
+    const parser = new PDFParse(uint8Data);
+    const result = await parser.getText();
+    if (result && typeof result.text === 'string' && result.text.trim().length > 20) {
+      return result.text.trim();
+    }
+  } catch (err: any) {
+    console.warn('Direct PDF text extraction note:', err?.message);
+  }
+  return '';
+}
+
 export async function handleAnalyzeRfq(req: Request, res: Response): Promise<void> {
   const startTime = Date.now();
 
@@ -155,7 +170,17 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       return;
     }
 
-    const { pdfBase64, fileName, fileSizeBytes } = req.body || {};
+    // Safely parse body if sent as string or object
+    let body = req.body;
+    if (typeof body === 'string') {
+      try {
+        body = JSON.parse(body);
+      } catch (e) {
+        // keep as is
+      }
+    }
+
+    const { pdfBase64, fileName, fileSizeBytes } = body || {};
 
     if (!pdfBase64 || typeof pdfBase64 !== 'string') {
       res.status(400).json({
@@ -184,7 +209,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       return;
     }
 
-    // Convert base64 string to buffer for Mistral Files upload
+    // Convert base64 string to buffer
     const fileBuffer = Buffer.from(trimmedBase64, 'base64');
 
     // Initialize Mistral AI SDK
@@ -193,109 +218,67 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
     });
 
     let documentContent = '';
-    let uploadedFileId: string | null = null;
+    let extractionSource = 'direct-text';
 
-    // Step 1: Upload PDF to Mistral Files API and run Mistral OCR
-    try {
-      const uploadedFile = await client.files.upload({
-        file: {
-          fileName: fileName || 'rfq_document.pdf',
-          content: fileBuffer,
-        },
-        purpose: 'ocr' as any,
-      });
-
-      if (uploadedFile && uploadedFile.id) {
-        uploadedFileId = uploadedFile.id;
-
-        const ocrResponse = await client.ocr.process({
-          model: 'mistral-ocr-latest',
-          document: {
-            type: 'file',
-            fileId: uploadedFile.id,
-          },
-        });
-
-        if (ocrResponse && ocrResponse.pages && ocrResponse.pages.length > 0) {
-          documentContent = ocrResponse.pages
-            .map((page, idx) => `--- PAGE ${idx + 1} ---\n${page.markdown || ''}`)
-            .join('\n\n');
-        }
-      }
-    } catch (ocrError: any) {
-      console.warn('Mistral Files / OCR processing note:', ocrError?.message);
-    } finally {
-      // Clean up uploaded temp file from Mistral storage
-      if (uploadedFileId) {
-        try {
-          await client.files.delete({ fileId: uploadedFileId });
-        } catch (cleanupErr) {
-          // Non-blocking cleanup error
-        }
-      }
+    // Step 1: Extract native digital PDF text (instant, reliable, works on all PDF RFQs)
+    const directPdfText = await extractTextFromPdfBuffer(fileBuffer);
+    if (directPdfText && directPdfText.length > 30) {
+      documentContent = directPdfText;
+      extractionSource = 'pdf-text';
     }
 
-    // Step 2: Fallback if OCR was not available or produced empty text
-    if (!documentContent.trim()) {
+    // Step 2: If the PDF has little or no selectable digital text (e.g. scanned photocopy), use Mistral OCR
+    if (!documentContent) {
+      let uploadedFileId: string | null = null;
       try {
-        const directChat = await client.chat.complete({
-          model: 'mistral-large-latest',
-          responseFormat: { type: 'json_object' },
-          messages: [
-            {
-              role: 'system',
-              content: `${RFQ_SYSTEM_INSTRUCTION}\n\nConform exactly to this JSON schema:\n${JSON_SCHEMA_TEMPLATE}`,
-            },
-            {
-              role: 'user',
-              content: [
-                {
-                  type: 'text',
-                  text: 'Extract all customer info, equipment tags, serial numbers, drawing numbers, and line items from this document into the JSON schema.',
-                },
-                {
-                  type: 'image_url',
-                  imageUrl: `data:application/pdf;base64,${trimmedBase64}`,
-                },
-              ] as any,
-            },
-          ],
+        const uploadedFile = await client.files.upload({
+          file: {
+            fileName: fileName || 'rfq_document.pdf',
+            content: new Uint8Array(fileBuffer),
+          },
+          purpose: 'ocr' as any,
         });
 
-        const rawContent = typeof directChat.choices?.[0]?.message?.content === 'string'
-          ? directChat.choices[0].message.content
-          : '';
+        if (uploadedFile && uploadedFile.id) {
+          uploadedFileId = uploadedFile.id;
 
-        if (rawContent) {
-          const parsed = cleanAndParseJson(rawContent);
-          const processingTimeMs = Date.now() - startTime;
-          res.status(200).json({
-            success: true,
-            data: parsed,
-            metadata: {
-              fileName: fileName || 'RFQ-Document.pdf',
-              fileSizeBytes: fileSizeBytes || 0,
-              extractedAt: new Date().toISOString(),
-              modelUsed: 'mistral-large-latest',
-              processingTimeMs,
+          const ocrResponse = await client.ocr.process({
+            model: 'mistral-ocr-latest',
+            document: {
+              type: 'file',
+              fileId: uploadedFile.id,
             },
           });
-          return;
+
+          if (ocrResponse && ocrResponse.pages && ocrResponse.pages.length > 0) {
+            documentContent = ocrResponse.pages
+              .map((page, idx) => `--- PAGE ${idx + 1} ---\n${page.markdown || ''}`)
+              .join('\n\n');
+            extractionSource = 'mistral-ocr';
+          }
         }
-      } catch (fallbackErr: any) {
-        console.error('Direct extraction fallback error:', fallbackErr?.message);
+      } catch (ocrErr: any) {
+        console.warn('Mistral OCR processing error:', ocrErr?.message);
+      } finally {
+        if (uploadedFileId) {
+          try {
+            await client.files.delete({ fileId: uploadedFileId });
+          } catch (e) {
+            // ignore
+          }
+        }
       }
     }
 
     if (!documentContent.trim()) {
       res.status(422).json({
-        error: 'The document was analyzed, but no RFQ information could be identified. Please ensure the PDF contains readable text or quotation tables.',
+        error: 'The document was analyzed, but no text or quotation tables could be read. If this is a scanned photograph, please ensure high resolution or provide a digital PDF.',
         code: 'EMPTY_RESPONSE',
       });
       return;
     }
 
-    // Step 3: Extract structured quotation data using Mistral Large
+    // Step 3: Analyze extracted text using Mistral Large with structured JSON schema
     const chatResponse = await client.chat.complete({
       model: 'mistral-large-latest',
       responseFormat: { type: 'json_object' },
@@ -303,11 +286,11 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       messages: [
         {
           role: 'system',
-          content: `${RFQ_SYSTEM_INSTRUCTION}\n\nYou must return a valid JSON object matching this schema:\n${JSON_SCHEMA_TEMPLATE}`,
+          content: `${RFQ_SYSTEM_INSTRUCTION}\n\nYou must return a valid JSON object matching this schema exactly:\n${JSON_SCHEMA_TEMPLATE}`,
         },
         {
           role: 'user',
-          content: `Extract the RFQ quotation details, line items, and equipment serials from this OCR-extracted document content:\n\n${documentContent}`,
+          content: `Extract the RFQ quotation details, line items, and equipment serials from this RFQ document content:\n\n${documentContent}`,
         },
       ],
     });
@@ -318,7 +301,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
 
     if (!rawText || rawText.trim() === '') {
       res.status(422).json({
-        error: 'The document was analyzed, but no RFQ information could be identified. Please ensure the PDF contains readable text or quotation tables.',
+        error: 'The document was analyzed, but Mistral AI returned an empty structured response. Please try again.',
         code: 'EMPTY_RESPONSE',
       });
       return;
@@ -345,7 +328,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
         fileName: fileName || 'RFQ-Document.pdf',
         fileSizeBytes: fileSizeBytes || 0,
         extractedAt: new Date().toISOString(),
-        modelUsed: 'mistral-ocr-latest / mistral-large-latest',
+        modelUsed: `mistral-large-latest (${extractionSource})`,
         processingTimeMs,
       },
     });
