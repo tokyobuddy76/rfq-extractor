@@ -232,9 +232,10 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       text: 'Perform an exhaustive industrial RFQ extraction on this entire document. Extract all customer details, RFQ commercial details, equipment identification (models, manufacturers, serial numbers, tags), every single line item requested with exact part numbers and drawing numbers, and all technical/commercial requirements. Preserve exact identifiers without reinterpreting them.',
     };
 
-    // Call Gemini 3.8 Flash model with structured JSON output
+    // Call Gemini model with structured JSON output (cheapest & fastest: gemini-3.1-flash-lite)
+    const modelName = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
     const response = await ai.models.generateContent({
-      model: 'gemini-3.8-flash',
+      model: modelName,
       contents: {
         parts: [filePart, promptPart],
       },
@@ -277,7 +278,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
         fileName: fileName || 'RFQ-Document.pdf',
         fileSizeBytes: fileSizeBytes || 0,
         extractedAt: new Date().toISOString(),
-        modelUsed: 'gemini-3.8-flash',
+        modelUsed: modelName,
         processingTimeMs,
       },
     });
