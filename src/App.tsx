@@ -29,14 +29,17 @@ export default function App() {
   const [isApproved, setIsApproved] = useState<boolean>(false);
   const [approvedAt, setApprovedAt] = useState<string | null>(null);
   const [approvedBy, setApprovedBy] = useState<string | null>(null);
+  const [selectedModel, setSelectedModel] = useState<string>('gemini-3.1-flash-lite');
 
   // Analyze RFQ via backend /api/analyze-rfq
-  const handleAnalyzeFile = async (file: File) => {
+  const handleAnalyzeFile = async (file: File, modelOverride?: string) => {
     setActiveFile(file);
     setIsAnalyzing(true);
     setAnalysisError(null);
     setAnalysisErrorCode(undefined);
     setCurrentStep('analyzing');
+
+    const modelToUse = modelOverride || selectedModel;
 
     try {
       const base64Data = await fileToBase64(file);
@@ -50,6 +53,7 @@ export default function App() {
           pdfBase64: base64Data,
           fileName: file.name,
           fileSizeBytes: file.size,
+          model: modelToUse,
         }),
       });
 
@@ -202,6 +206,8 @@ export default function App() {
             onAnalyze={handleAnalyzeFile}
             onLoadSample={handleLoadSample}
             isAnalyzing={isAnalyzing}
+            selectedModel={selectedModel}
+            onSelectModel={setSelectedModel}
           />
         )}
 

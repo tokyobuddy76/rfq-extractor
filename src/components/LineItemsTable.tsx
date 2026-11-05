@@ -127,7 +127,7 @@ export const LineItemsTable: React.FC<LineItemsTableProps> = ({
     return true;
   });
 
-  // Calculate review stats
+  // Calculate review stats & financial total
   const totalParts = lineItems.length;
   const missingPartNumbers = lineItems.filter((i) => !i.partNumber || i.partNumberStatus === 'Not found').length;
   const missingQuantities = lineItems.filter((i) => i.quantity === null || i.quantity === undefined || i.quantity === '').length;
@@ -137,6 +137,14 @@ export const LineItemsTable: React.FC<LineItemsTableProps> = ({
       i.drawingNumberStatus === 'Review recommended' ||
       i.quantityStatus === 'Review recommended'
   ).length;
+
+  const grandTotalAmount = lineItems.reduce((acc, item) => {
+    if (item.totalAmount !== null && item.totalAmount !== undefined && item.totalAmount !== '') {
+      const val = typeof item.totalAmount === 'number' ? item.totalAmount : parseFloat(String(item.totalAmount).replace(/[^0-9.-]/g, ''));
+      return !isNaN(val) ? acc + val : acc;
+    }
+    return acc;
+  }, 0);
 
   return (
     <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-5 space-y-4">
@@ -150,7 +158,7 @@ export const LineItemsTable: React.FC<LineItemsTableProps> = ({
             </h3>
           </div>
           <p className="text-xs text-slate-500 mt-0.5">
-            Editable table of spare parts, components, and assemblies extracted verbatim from the RFQ.
+            Editable table of spare parts, unit basic pricing, and total amounts extracted verbatim from the RFQ.
           </p>
         </div>
 
@@ -186,9 +194,11 @@ export const LineItemsTable: React.FC<LineItemsTableProps> = ({
           </span>
         </div>
         <div>
-          <span className="text-slate-500 block text-[11px]">Review Recommended</span>
-          <span className={`font-bold text-sm ${itemsNeedingReview > 0 ? 'text-amber-600' : 'text-slate-600'}`}>
-            {itemsNeedingReview} items
+          <span className="text-slate-500 block text-[11px]">Quotation Total</span>
+          <span className="font-bold text-sm text-blue-700 font-mono">
+            {grandTotalAmount > 0
+              ? grandTotalAmount.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+              : 'Unspecified'}
           </span>
         </div>
       </div>
@@ -255,19 +265,18 @@ export const LineItemsTable: React.FC<LineItemsTableProps> = ({
               </th>
               <th className="px-3 py-2.5 min-w-[150px]">Drawing Number</th>
               <th className="px-3 py-2.5 min-w-[220px]">Description</th>
-              <th className="px-3 py-2.5 min-w-[90px]">Qty</th>
-              <th className="px-3 py-2.5 min-w-[70px]">Unit</th>
-              <th className="px-3 py-2.5 min-w-[150px]">Equip S/N</th>
-              <th className="px-3 py-2.5 min-w-[75px]">Rev</th>
-              <th className="px-3 py-2.5 min-w-[120px]">Material</th>
-              <th className="px-3 py-2.5 min-w-[150px]">Notes</th>
+              <th className="px-3 py-2.5 min-w-[90px] text-center">Qty</th>
+              <th className="px-3 py-2.5 min-w-[70px] text-center">Unit</th>
+              <th className="px-3 py-2.5 min-w-[130px] text-right">Unit Basic Price</th>
+              <th className="px-3 py-2.5 min-w-[140px] text-right">Total Amount</th>
+              <th className="px-3 py-2.5 min-w-[160px]">Notes</th>
               <th className="px-2 py-2.5 w-12 text-center">Action</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100 bg-white">
             {filteredItems.length === 0 ? (
               <tr>
-                <td colSpan={11} className="px-4 py-8 text-center text-slate-400">
+                <td colSpan={10} className="px-4 py-8 text-center text-slate-400">
                   {filterText || statusFilter !== 'all'
                     ? 'No line items match the selected filter.'
                     : 'No line items present. Click "Add Line Item" to enter items manually.'}
@@ -278,6 +287,8 @@ export const LineItemsTable: React.FC<LineItemsTableProps> = ({
                 const partModified = isFieldModified(index, 'partNumber');
                 const qtyModified = isFieldModified(index, 'quantity');
                 const drawingModified = isFieldModified(index, 'drawingNumber');
+                const priceModified = isFieldModified(index, 'unitPrice');
+                const totalModified = isFieldModified(index, 'totalAmount');
                 const isItemModified = item.isUserModified || item.isUserAdded;
 
                 return (
@@ -362,7 +373,18 @@ export const LineItemsTable: React.FC<LineItemsTableProps> = ({
                           type="text"
                           value={item.quantity !== null && item.quantity !== undefined ? item.quantity : ''}
                           placeholder="0"
-                          onChange={(e) => handleFieldChange(index, 'quantity', e.target.value)}
+                          onChange={(e) => {
+                            const newQty = e.target.value;
+                            handleFieldChange(index, 'quantity', newQty);
+                            // Auto recalculate totalAmount if unitPrice is present
+                            if (item.unitPrice !== null && item.unitPrice !== undefined && item.unitPrice !== '') {
+                              const qNum = parseFloat(newQty.replace(/,/g, ''));
+                              const pNum = typeof item.unitPrice === 'number' ? item.unitPrice : parseFloat(String(item.unitPrice).replace(/[^0-9.-]/g, ''));
+                              if (!isNaN(qNum) && !isNaN(pNum) && qNum >= 0 && pNum >= 0) {
+                                handleFieldChange(index, 'totalAmount', (qNum * pNum).toFixed(2));
+                              }
+                            }
+                          }}
                           className={`w-full px-2 py-1 rounded font-mono font-bold text-xs text-center border ${
                             item.quantity === null || item.quantity === undefined || item.quantity === ''
                               ? 'border-rose-300 bg-rose-50/40 text-rose-900'
@@ -388,37 +410,51 @@ export const LineItemsTable: React.FC<LineItemsTableProps> = ({
                       />
                     </td>
 
-                    {/* Equipment Serial Number */}
+                    {/* Unit Basic Price */}
                     <td className="px-3 py-2">
-                      <input
-                        type="text"
-                        value={item.equipmentSerialNumber || ''}
-                        placeholder="e.g. WAR-8849-01"
-                        onChange={(e) => handleFieldChange(index, 'equipmentSerialNumber', e.target.value)}
-                        className="w-full px-2 py-1 rounded font-mono text-xs border border-slate-200 bg-white focus:border-blue-500"
-                      />
+                      <div className="space-y-1">
+                        <input
+                          type="text"
+                          value={item.unitPrice !== null && item.unitPrice !== undefined ? item.unitPrice : ''}
+                          placeholder="0.00"
+                          onChange={(e) => {
+                            const newPrice = e.target.value;
+                            handleFieldChange(index, 'unitPrice', newPrice);
+                            // Auto recalculate totalAmount
+                            if (item.quantity !== null && item.quantity !== undefined && item.quantity !== '') {
+                              const qNum = typeof item.quantity === 'number' ? item.quantity : parseFloat(String(item.quantity).replace(/,/g, ''));
+                              const pNum = parseFloat(newPrice.replace(/[^0-9.-]/g, ''));
+                              if (!isNaN(qNum) && !isNaN(pNum) && qNum >= 0 && pNum >= 0) {
+                                handleFieldChange(index, 'totalAmount', (qNum * pNum).toFixed(2));
+                              }
+                            }
+                          }}
+                          className={`w-full px-2 py-1 rounded font-mono font-medium text-xs text-right border ${
+                            priceModified
+                              ? 'border-amber-300 bg-amber-50/40 text-slate-900'
+                              : 'border-slate-200 bg-white text-slate-900'
+                          } focus:border-blue-500`}
+                        />
+                        <span className="block text-[10px] text-slate-400 text-right">Per unit</span>
+                      </div>
                     </td>
 
-                    {/* Revision */}
+                    {/* Total Amount */}
                     <td className="px-3 py-2">
-                      <input
-                        type="text"
-                        value={item.revision || ''}
-                        placeholder="Rev"
-                        onChange={(e) => handleFieldChange(index, 'revision', e.target.value)}
-                        className="w-full px-1.5 py-1 rounded font-mono text-xs text-center border border-slate-200 bg-white focus:border-blue-500"
-                      />
-                    </td>
-
-                    {/* Material */}
-                    <td className="px-3 py-2">
-                      <input
-                        type="text"
-                        value={item.material || ''}
-                        placeholder="e.g. Ultrachrome A05, 316SS"
-                        onChange={(e) => handleFieldChange(index, 'material', e.target.value)}
-                        className="w-full px-2 py-1 rounded text-xs border border-slate-200 bg-white focus:border-blue-500"
-                      />
+                      <div className="space-y-1">
+                        <input
+                          type="text"
+                          value={item.totalAmount !== null && item.totalAmount !== undefined ? item.totalAmount : ''}
+                          placeholder="0.00"
+                          onChange={(e) => handleFieldChange(index, 'totalAmount', e.target.value)}
+                          className={`w-full px-2 py-1 rounded font-mono font-bold text-xs text-right border ${
+                            totalModified
+                              ? 'border-amber-300 bg-amber-50/40 text-blue-900'
+                              : 'border-slate-200 bg-slate-50 text-blue-900'
+                          } focus:border-blue-500`}
+                        />
+                        <span className="block text-[10px] text-slate-400 text-right">Extended</span>
+                      </div>
                     </td>
 
                     {/* Notes */}
@@ -426,7 +462,7 @@ export const LineItemsTable: React.FC<LineItemsTableProps> = ({
                       <input
                         type="text"
                         value={item.notes || ''}
-                        placeholder="Inspection, certs..."
+                        placeholder="Inspection, delivery notes..."
                         onChange={(e) => handleFieldChange(index, 'notes', e.target.value)}
                         className="w-full px-2 py-1 rounded text-xs border border-slate-200 bg-white focus:border-blue-500"
                       />

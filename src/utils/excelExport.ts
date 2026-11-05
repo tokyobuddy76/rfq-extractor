@@ -74,9 +74,8 @@ export function exportRfqToExcel(rfqData: RfqData): string {
     'Description',
     'Quantity',
     'Unit',
-    'Equipment Serial Number',
-    'Revision',
-    'Material',
+    'Unit Basic Price',
+    'Total Amount',
     'Requested Delivery Date',
     'Notes',
   ];
@@ -89,27 +88,25 @@ export function exportRfqToExcel(rfqData: RfqData): string {
     item.description || '',
     item.quantity !== null && item.quantity !== undefined ? item.quantity : '',
     item.unit || '',
-    item.equipmentSerialNumber || '',
-    item.revision || '',
-    item.material || '',
+    item.unitPrice !== null && item.unitPrice !== undefined ? item.unitPrice : '',
+    item.totalAmount !== null && item.totalAmount !== undefined ? item.totalAmount : '',
     item.requestedDeliveryDate || '',
     item.notes || '',
   ]);
 
   const wsLineItems = XLSX.utils.aoa_to_sheet([lineItemHeaders, ...lineItemRows]);
   wsLineItems['!cols'] = [
-    { wch: 12 }, // Line
-    { wch: 24 }, // Part Number
-    { wch: 20 }, // Drawing Number
-    { wch: 20 }, // Customer Part No
-    { wch: 40 }, // Description
-    { wch: 10 }, // Qty
+    { wch: 12 }, // Line Number
+    { wch: 22 }, // Part Number
+    { wch: 22 }, // Drawing Number
+    { wch: 22 }, // Customer Part Number
+    { wch: 38 }, // Description
+    { wch: 10 }, // Quantity
     { wch: 8 },  // Unit
-    { wch: 24 }, // Equip S/N
-    { wch: 10 }, // Rev
-    { wch: 18 }, // Material
-    { wch: 22 }, // Req Delivery Date
-    { wch: 30 }, // Notes
+    { wch: 16 }, // Unit Basic Price
+    { wch: 16 }, // Total Amount
+    { wch: 22 }, // Requested Delivery Date
+    { wch: 35 }, // Notes
   ];
 
   XLSX.utils.book_append_sheet(wb, wsLineItems, 'Line Items');

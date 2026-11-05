@@ -60,6 +60,23 @@ export function normalizeExtractedRfq(raw: Partial<RfqData>): RfqData {
       ? (typeof item.quantity === 'number' ? item.quantity : String(item.quantity).trim())
       : null;
 
+    const unitPrice = item.unitPrice !== undefined && item.unitPrice !== null && item.unitPrice !== ''
+      ? (typeof item.unitPrice === 'number' ? item.unitPrice : String(item.unitPrice).trim())
+      : null;
+
+    let totalAmount = item.totalAmount !== undefined && item.totalAmount !== null && item.totalAmount !== ''
+      ? (typeof item.totalAmount === 'number' ? item.totalAmount : String(item.totalAmount).trim())
+      : null;
+
+    // If totalAmount is missing but qty and unitPrice are valid numbers, auto-calculate total
+    if ((totalAmount === null || totalAmount === '') && qty !== null && unitPrice !== null) {
+      const qNum = typeof qty === 'number' ? qty : parseFloat(String(qty).replace(/,/g, ''));
+      const pNum = typeof unitPrice === 'number' ? unitPrice : parseFloat(String(unitPrice).replace(/[^0-9.-]/g, ''));
+      if (!isNaN(qNum) && !isNaN(pNum) && qNum > 0 && pNum >= 0) {
+        totalAmount = (qNum * pNum).toFixed(2);
+      }
+    }
+
     return {
       id: item.id || `line-${Date.now()}-${idx}-${Math.random().toString(36).substring(2, 6)}`,
       lineNumber: item.lineNumber ? String(item.lineNumber).trim() : String(idx + 1),
@@ -69,6 +86,8 @@ export function normalizeExtractedRfq(raw: Partial<RfqData>): RfqData {
       description: item.description ? String(item.description).trim() : null,
       quantity: qty,
       unit: item.unit ? String(item.unit).trim().toUpperCase() : null,
+      unitPrice: unitPrice || null,
+      totalAmount: totalAmount || null,
       equipmentSerialNumber: serialNumber || null,
       revision: item.revision ? String(item.revision).trim() : null,
       material: item.material ? String(item.material).trim() : null,

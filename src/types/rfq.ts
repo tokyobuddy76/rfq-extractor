@@ -41,9 +41,11 @@ export interface LineItem {
   description: string | null;
   quantity: number | string | null;
   unit: string | null;
-  equipmentSerialNumber: string | null;
-  revision: string | null;
-  material: string | null;
+  unitPrice?: number | string | null;
+  totalAmount?: number | string | null;
+  equipmentSerialNumber?: string | null;
+  revision?: string | null;
+  material?: string | null;
   requestedDeliveryDate: string | null;
   notes: string | null;
   // Statuses

@@ -1,17 +1,65 @@
 import React, { useState, useRef } from 'react';
-import { Upload, FileText, X, AlertCircle, FileCheck, ArrowRight, Shield, Zap } from 'lucide-react';
+import { Upload, FileText, X, AlertCircle, FileCheck, ArrowRight, Shield, Zap, Sparkles, Cpu } from 'lucide-react';
 import { validatePdfFile, MAX_FILE_SIZE_LABEL } from '../utils/fileValidation';
 
+export interface ModelOption {
+  id: string;
+  name: string;
+  tag: string;
+  tier: 'economy' | 'standard' | 'premium';
+  description: string;
+  priceIndicator: '$' | '$$' | '$$$' | '$$$$';
+}
+
+export const GEMINI_MODEL_OPTIONS: ModelOption[] = [
+  {
+    id: 'gemini-3.1-flash-lite',
+    name: 'Gemini 3.1 Flash Lite',
+    tag: 'Cheapest & Fastest',
+    tier: 'economy',
+    description: 'Ultra-low cost ($0.075 / 1M tokens), high speed extraction for standard PDF tables and clean quotes',
+    priceIndicator: '$',
+  },
+  {
+    id: 'gemini-flash-latest',
+    name: 'Gemini Flash (Latest)',
+    tag: 'Balanced Economy',
+    tier: 'standard',
+    description: 'High throughput, responsive extraction with strong multimodal OCR reasoning',
+    priceIndicator: '$$',
+  },
+  {
+    id: 'gemini-3.8-flash',
+    name: 'Gemini 3.8 Flash',
+    tag: 'Advanced Precision',
+    tier: 'standard',
+    description: 'Enhanced document comprehension for dense schedules and multi-equipment inquiries',
+    priceIndicator: '$$$',
+  },
+  {
+    id: 'gemini-4-argon',
+    name: 'Gemini 4 Argon',
+    tag: 'Highest Accuracy (Pro Tier)',
+    tier: 'premium',
+    description: 'Most powerful deep reasoning for intricate drawings, blurry scans, and ambiguous RFQs',
+    priceIndicator: '$$$$',
+  },
+];
+
 interface PdfUploaderProps {
-  onAnalyze: (file: File) => void;
+  onAnalyze: (file: File, modelId?: string) => void;
   onLoadSample: (sampleKey: 'pump' | 'compressor') => void;
   isAnalyzing: boolean;
+  selectedModel: string;
+  onSelectModel: (modelId: string) => void;
 }
 
 export const PdfUploader: React.FC<PdfUploaderProps> = ({
   onAnalyze,
   onLoadSample,
   isAnalyzing,
+  selectedModel,
+  onSelectModel,
 }) => {
   const [dragActive, setDragActive] = useState<boolean>(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -74,7 +122,7 @@ export const PdfUploader: React.FC<PdfUploaderProps> = ({
       setErrorMsg('Please select a PDF document before analyzing.');
       return;
     }
-    onAnalyze(selectedFile);
+    onAnalyze(selectedFile, selectedModel);
   };
 
   const formatFileSize = (bytes: number) => {
@@ -91,13 +139,71 @@ export const PdfUploader: React.FC<PdfUploaderProps> = ({
           Industrial RFQ Extractor
         </h1>
         <p className="text-base sm:text-lg text-slate-600 max-w-2xl mx-auto">
-          Upload customer quotation requests in PDF. Extract customer data, equipment tags, serial numbers, drawing numbers, and all line items into verified quotation sheets.
+          Upload customer quotation requests in PDF. Extract customer data, equipment tags, drawing numbers, unit basic prices, and line items into verified quotation sheets.
         </p>
       </div>
 
       {/* Main Upload Card */}
-      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 sm:p-8">
-        <form onSubmit={handleSubmit} className="space-y-6">
+      <div className="bg-white rounded-xl shadow-sm border border-slate-200 p-6 sm:p-8 space-y-6">
+        {/* Model Selection Bar - ordered cheapest to most expensive */}
+        <div className="space-y-3">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+            <div className="flex items-center space-x-2">
+              <Cpu className="w-4 h-4 text-blue-600" />
+              <label className="text-xs font-bold uppercase tracking-wider text-slate-800">
+                Choose Gemini Extraction Model
+              </label>
+            </div>
+            <span className="text-[11px] text-slate-500">
+              Sorted from lowest cost to highest accuracy tier
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+            {GEMINI_MODEL_OPTIONS.map((m) => {
+              const isSelected = selectedModel === m.id;
+              return (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => onSelectModel(m.id)}
+                  className={`p-3 rounded-lg border text-left transition-all relative flex flex-col justify-between ${
+                    isSelected
+                      ? 'border-blue-600 bg-blue-50/70 ring-1 ring-blue-600 shadow-xs'
+                      : 'border-slate-200 bg-slate-50/50 hover:bg-slate-50 hover:border-slate-300'
+                  }`}
+                >
+                  <div className="space-y-1">
+                    <div className="flex items-center justify-between">
+                      <span className="font-mono text-xs font-bold text-slate-700 bg-white px-1.5 py-0.5 rounded border border-slate-200 shadow-2xs">
+                        {m.priceIndicator}
+                      </span>
+                      <span
+                        className={`text-[10px] font-semibold px-1.5 py-0.5 rounded ${
+                          m.tier === 'economy'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : m.tier === 'standard'
+                            ? 'bg-blue-100 text-blue-800'
+                            : 'bg-purple-100 text-purple-800'
+                        }`}
+                      >
+                        {m.tag}
+                      </span>
+                    </div>
+                    <p className={`text-xs font-bold ${isSelected ? 'text-blue-900' : 'text-slate-900'}`}>
+                      {m.name}
+                    </p>
+                    <p className="text-[10px] text-slate-500 leading-snug line-clamp-2">
+                      {m.description}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <form onSubmit={handleSubmit} className="space-y-6 pt-2 border-t border-slate-100">
           <input
             ref={inputRef}
             type="file"
@@ -190,7 +296,9 @@ export const PdfUploader: React.FC<PdfUploaderProps> = ({
           <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-2 border-t border-slate-100">
             <div className="flex items-center space-x-2 text-xs text-slate-500">
               <Shield className="w-4 h-4 text-slate-400" />
-              <span>Confidential: RFQs are processed securely via server-side Gemini</span>
+              <span>
+                Using <strong className="text-slate-700">{selectedModel}</strong> • Confidential server-side analysis
+              </span>
             </div>
 
             <button

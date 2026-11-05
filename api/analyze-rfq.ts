@@ -94,6 +94,8 @@ const rfqResponseSchema = {
           description: { type: Type.STRING, description: 'Item description or specification' },
           quantity: { type: Type.STRING, description: 'Quantity requested' },
           unit: { type: Type.STRING, description: 'Unit of measure (e.g. EA, PC, SET, M, KG)' },
+          unitPrice: { type: Type.STRING, description: 'Unit basic price / unit rate if stated in RFQ document' },
+          totalAmount: { type: Type.STRING, description: 'Total price / extended amount for line item if stated' },
           equipmentSerialNumber: { type: Type.STRING, description: 'Associated equipment serial or tag number if specified' },
           revision: { type: Type.STRING, description: 'Revision level or letter' },
           material: { type: Type.STRING, description: 'Material grade or standard' },
@@ -182,7 +184,7 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
       }
     }
 
-    const { pdfBase64, fileName, fileSizeBytes } = body || {};
+    const { pdfBase64, fileName, fileSizeBytes, model } = body || {};
 
     if (!pdfBase64 || typeof pdfBase64 !== 'string') {
       res.status(400).json({
@@ -229,11 +231,14 @@ export async function handleAnalyzeRfq(req: Request, res: Response): Promise<voi
     };
 
     const promptPart = {
-      text: 'Perform an exhaustive industrial RFQ extraction on this entire document. Extract all customer details, RFQ commercial details, equipment identification (models, manufacturers, serial numbers, tags), every single line item requested with exact part numbers and drawing numbers, and all technical/commercial requirements. Preserve exact identifiers without reinterpreting them.',
+      text: 'Perform an exhaustive industrial RFQ extraction on this entire document. Extract all customer details, RFQ commercial details, equipment identification (models, manufacturers, serial numbers, tags), every single line item requested with exact part numbers, drawing numbers, unit basic prices, and total amounts if specified in the document, and all technical/commercial requirements. Preserve exact identifiers without reinterpreting them.',
     };
 
-    // Call Gemini model with structured JSON output (cheapest & fastest: gemini-3.1-flash-lite)
-    const modelName = process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+    // Determine model to use: chosen from client dropdown -> GEMINI_MODEL env var -> default cheapest 'gemini-3.1-flash-lite'
+    const allowedModels = ['gemini-3.1-flash-lite', 'gemini-flash-latest', 'gemini-3.8-flash', 'gemini-4-argon'];
+    const requestedModel = typeof model === 'string' && allowedModels.includes(model.trim()) ? model.trim() : null;
+    const modelName = requestedModel || process.env.GEMINI_MODEL || 'gemini-3.1-flash-lite';
+
     const response = await ai.models.generateContent({
       model: modelName,
       contents: {
