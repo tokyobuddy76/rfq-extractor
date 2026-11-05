@@ -134,12 +134,18 @@ export const PdfUploader: React.FC<PdfUploaderProps> = ({
   return (
     <div className="max-w-4xl mx-auto space-y-8">
       {/* Introduction Hero */}
-      <div className="text-center space-y-2">
-        <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight sm:text-4xl">
-          Industrial RFQ Extractor
+      <div className="text-center space-y-3">
+        <div className="inline-flex items-center space-x-2 bg-blue-50 border border-blue-200/80 px-3 py-1 rounded-full text-xs font-semibold text-blue-800 shadow-2xs">
+          <span>Smart Navigation & Information Parsing</span>
+        </div>
+        <h1 className="text-3xl font-extrabold text-slate-900 tracking-tight sm:text-5xl">
+          SNIP
         </h1>
-        <p className="text-base sm:text-lg text-slate-600 max-w-2xl mx-auto">
-          Upload customer quotation requests in PDF. Extract customer data, equipment tags, drawing numbers, unit basic prices, and line items into verified quotation sheets.
+        <p className="text-base sm:text-lg font-medium text-blue-600 tracking-wide">
+          “SNIP it. Extract it. Excel it.”
+        </p>
+        <p className="text-xs sm:text-sm text-slate-500 max-w-2xl mx-auto">
+          Upload industrial RFQ PDFs. Parse customer data, equipment schedules, drawing numbers, unit basic prices, and line items directly into verified quotation sheets.
         </p>
       </div>
 

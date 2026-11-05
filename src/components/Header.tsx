@@ -14,17 +14,19 @@ export const Header: React.FC<HeaderProps> = ({ currentStep, onReset, fileName }
         <div className="flex items-center justify-between h-16">
           {/* Logo & Brand */}
           <div className="flex items-center space-x-3 cursor-pointer" onClick={onReset}>
-            <div className="w-9 h-9 rounded bg-blue-600 flex items-center justify-center text-white font-bold tracking-wider shadow-sm">
-              <FileText className="w-5 h-5" />
+            <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center text-white font-extrabold tracking-wider shadow-sm ring-1 ring-blue-400/40">
+              <span className="text-sm font-black font-mono">SNIP</span>
             </div>
             <div>
               <div className="flex items-center space-x-2">
-                <span className="font-bold text-lg tracking-tight text-white">RFQ Extractor</span>
-                <span className="text-xs bg-blue-900/80 text-blue-300 font-medium px-2 py-0.5 rounded border border-blue-700/60">
-                  Industrial & Aftermarket Parts
+                <span className="font-extrabold text-xl tracking-tight text-white">SNIP</span>
+                <span className="text-[11px] bg-blue-900/80 text-blue-300 font-semibold px-2 py-0.5 rounded border border-blue-700/60 hidden sm:inline-block">
+                  Smart Navigation & Information Parsing
                 </span>
               </div>
-              <p className="text-xs text-slate-400 hidden sm:block">Automated quotation ingestion & verification system</p>
+              <p className="text-xs text-blue-300/90 font-medium">
+                SNIP it. Extract it. Excel it.
+              </p>
             </div>
           </div>
 

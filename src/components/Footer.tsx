@@ -8,7 +8,7 @@ export const Footer: React.FC = () => {
         <div className="flex items-center space-x-2">
           <Sparkles className="w-4 h-4 text-blue-600" />
           <span className="font-semibold text-slate-700">
-            Document extraction powered by Google Gemini
+            SNIP • Smart Navigation & Information Parsing
           </span>
         </div>
 
